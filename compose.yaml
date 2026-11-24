@@ -1,0 +1,30 @@
+services:
+  valkey:
+    image: valkey/valkey:9
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 1s
+      retries: 30
+
+  # Three masters, no replicas, announced on 127.0.0.1 so clients on the host follow MOVED redirects.
+  valkey-cluster:
+    image: valkey/valkey:9
+    ports:
+      - "6380-6382:6380-6382"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        for port in 6380 6381 6382; do
+          valkey-server --port $$port --cluster-enabled yes --cluster-config-file /data/nodes-$$port.conf \
+            --cluster-announce-ip 127.0.0.1 --protected-mode no --save '' --appendonly no --daemonize yes
+        done
+        sleep 1
+        valkey-cli --cluster create 127.0.0.1:6380 127.0.0.1:6381 127.0.0.1:6382 --cluster-replicas 0 --cluster-yes
+        exec sleep infinity
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -p 6380 cluster info | grep -q cluster_state:ok"]
+      interval: 1s
+      retries: 30

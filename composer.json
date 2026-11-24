@@ -1,0 +1,76 @@
+{
+    "name": "keepsuit/laravel-redis-prefix-flush",
+    "description": "Redis cache store for Laravel that flushes only the application's keys instead of the whole database",
+    "keywords": [
+        "Keepsuit",
+        "laravel",
+        "redis",
+        "valkey",
+        "cache",
+        "laravel-redis-prefix-flush"
+    ],
+    "homepage": "https://github.com/keepsuit/laravel-redis-prefix-flush",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Fabio Capucci",
+            "email": "f.capucci@keepsuit.com",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.3",
+        "illuminate/contracts": "^12.53 || ^13.0",
+        "spatie/laravel-package-tools": "^1.16"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.14",
+        "nunomaduro/collision": "^8.8",
+        "orchestra/testbench": "^10.8 || ^11.0",
+        "pestphp/pest": "^4.0",
+        "pestphp/pest-plugin-arch": "^4.0",
+        "pestphp/pest-plugin-laravel": "^4.0",
+        "phpstan/extension-installer": "^1.4",
+        "phpstan/phpstan-deprecation-rules": "^2.0",
+        "phpstan/phpstan-phpunit": "^2.0",
+        "predis/predis": "^2.3 || ^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Keepsuit\\RedisPrefixFlush\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Keepsuit\\RedisPrefixFlush\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "post-autoload-dump": "@prepare",
+        "clear": "@php vendor/bin/testbench package:purge-skeleton --ansi",
+        "prepare": "@php vendor/bin/testbench package:discover --ansi",
+        "test": "vendor/bin/pest",
+        "test-coverage": "vendor/bin/pest --coverage",
+        "lint": [
+            "pint",
+            "phpstan"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "phpstan/extension-installer": true
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Keepsuit\\RedisPrefixFlush\\RedisPrefixFlushServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
