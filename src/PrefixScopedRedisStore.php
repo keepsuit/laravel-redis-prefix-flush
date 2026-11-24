@@ -8,6 +8,8 @@ use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
+use Predis\Client as PredisClient;
+use Predis\Connection\Replication\ReplicationInterface;
 use Redis;
 use RedisCluster;
 use RuntimeException;
@@ -50,18 +52,18 @@ class PrefixScopedRedisStore extends RedisStore
         $pattern = addcslashes($connectionPrefix.$this->prefix, '*?[]\\').'*';
 
         foreach ($this->scan($connection, $pattern) as $node => $keys) {
-            // Scanned keys carry the connection prefix, which the client adds again on DEL.
+            // Scanned keys carry the connection prefix, which the client adds again on UNLINK.
             $keys = array_map(fn (string $key) => substr($key, strlen($connectionPrefix)), $keys);
 
             if ($connection instanceof PredisClusterConnection) {
                 // Delete on the node that returned the keys: iterating a Predis cluster resets its slot map.
                 $node->pipeline(function ($pipe) use ($keys) {
                     foreach ($keys as $key) {
-                        $pipe->del($key);
+                        $pipe->unlink($key);
                     }
                 });
             } else {
-                $connection->del(...$keys);
+                $connection->unlink(...$keys);
             }
         }
     }
@@ -82,6 +84,11 @@ class PrefixScopedRedisStore extends RedisStore
         };
 
         foreach ($nodes as $node) {
+            // Predis sends SCAN to a replica, which misses keys not yet replicated.
+            if ($node instanceof PredisClient && $node->getConnection() instanceof ReplicationInterface) {
+                $node->getConnection()->switchToMaster();
+            }
+
             $cursor = '0';
 
             do {

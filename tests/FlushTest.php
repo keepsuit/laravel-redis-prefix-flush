@@ -165,3 +165,42 @@ it('deletes every key when both prefixes are empty', function (string $client, s
 
     expect($this->keys())->toBe([]);
 })->with('redis');
+
+it('flushes across several scan batches', function (string $client, string $topology) {
+    $this->useRedis($client, $topology);
+
+    Cache::putMany(array_fill_keys(array_map(fn (int $i) => "key-$i", range(1, 2500)), 'value'), 60);
+    Cache::store('app_b')->put('key', 'value');
+
+    Cache::flush();
+
+    expect($this->keys())->toBe(['app_b_cache_key']);
+})->with('redis');
+
+it('scans the master of a predis replication', function () {
+    $this->useRedis('predis', 'single');
+
+    $replica = $this->admin(6390);
+    $replica->flushAll();
+    $replica->rawCommand('ACL', 'SETUSER', 'app_a', 'reset', 'on', '>secret', '~app_a_*', '&*', '+@all', '-flushdb', '-flushall', '-keys');
+
+    $node = fn (int $port, string $role) => ['host' => getenv('REDIS_HOST') ?: '127.0.0.1', 'port' => $port, 'username' => 'app_a', 'password' => 'secret', 'role' => $role];
+    config()->set('database.redis.options', []);
+    config()->set('database.redis.clusters.app_a_replication', [$node(6379, 'master'), $node(6390, 'slave'), 'options' => ['replication' => 'predis', 'prefix' => 'app_a_']]);
+    config()->set('cache.stores.redis.connection', 'app_a_replication');
+    $reconnect = function () {
+        app()->forgetInstance('redis');
+        Redis::clearResolvedInstance('redis');
+        Cache::forgetDriver('redis');
+    };
+    $reconnect();
+
+    Cache::put('key', 'value');
+    Cache::store('app_b')->put('key', 'value');
+
+    // A fresh connection, as in "artisan cache:clear", reads from the replica until it writes.
+    $reconnect();
+    Cache::flush();
+
+    expect($this->keys())->toBe(['app_b_cache_key']);
+});

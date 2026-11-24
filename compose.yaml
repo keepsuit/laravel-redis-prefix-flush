@@ -8,6 +8,17 @@ services:
       interval: 1s
       retries: 30
 
+  # Declared as a Predis replica but never replicates: it stands for a replica that lags behind.
+  valkey-replica:
+    image: valkey/valkey:9
+    command: valkey-server --port 6390
+    ports:
+      - "6390:6390"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-p", "6390", "ping"]
+      interval: 1s
+      retries: 30
+
   # Three masters, no replicas, announced on 127.0.0.1 so clients on the host follow MOVED redirects.
   valkey-cluster:
     image: valkey/valkey:9
