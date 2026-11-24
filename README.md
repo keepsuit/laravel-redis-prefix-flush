@@ -17,6 +17,8 @@ composer require keepsuit/laravel-redis-prefix-flush
 
 No configuration is needed: every cache store with `'driver' => 'redis'` uses the new store. It is built exactly like Laravel's own Redis store (`connection`, `lock_connection`, `prefix`, `serializable_classes`) and differs only in `flush()` and `flushLocks()`. Stores with other drivers are not affected.
 
+The package registers its store under the `redis` driver name. A `redis` store that another service provider resolves before this package registers keeps Laravel's own store, and if another package also extends the `redis` driver, the extension registered last applies.
+
 ## Flush scope
 
 `flush()` deletes, on the cache connection, every key that starts with:
@@ -31,7 +33,9 @@ With Laravel's default configuration (`APP_NAME=Shop`), that is `shop-database-s
 - With an empty cache prefix, the scope is the connection prefix.
 - With both prefixes empty, every key of the database is deleted, one batch at a time. The result is the same as `FLUSHDB`, but the command is never sent.
 
-Keys are found with `SCAN ... MATCH` in batches of 1000 and deleted with `DEL`. `FLUSHDB`, `FLUSHALL` and `KEYS` are never sent. Glob characters in the prefixes are escaped, so they cannot widen the scope.
+Keys are found with `SCAN ... MATCH ... COUNT 1000` (a hint to the server, not a fixed batch size) and deleted with `DEL`, as Laravel does when it forgets a key. If a `SCAN` or `DEL` fails, the flush throws instead of reporting success. `FLUSHDB`, `FLUSHALL` and `KEYS` are never sent. Glob characters in the prefixes are escaped, so they cannot widen the scope.
+
+Unlike `FLUSHDB`, the flush is not atomic: a key written while the scan is running may survive it.
 
 `cache:clear`, `optimize:clear`, `Cache::flush()`, `Cache::clear()`, `Cache::store('redis')->flush()` and `Cache::tags(...)->flush()` keep working and emit the same events as before.
 
@@ -40,6 +44,7 @@ Keys are found with `SCAN ... MATCH` in batches of 1000 and deleted with `DEL`. 
 - Laravel 12.53+ and 13.
 - phpredis and Predis.
 - A single node and Redis Cluster. On a cluster every master node is scanned, and keys are deleted without multi-key commands that span hash slots.
+- Predis replication (master and replicas): keys are scanned on the master, so a replica that lags behind cannot hide keys from the flush.
 - Redis and Valkey.
 
 `cache:clear --locks` and `flushLocks()` on the cache repository exist from Laravel 13. On Laravel 12 the store still provides `flushLocks()`, but Laravel offers no command to call it.
@@ -69,7 +74,7 @@ On a cluster the ACL user must exist on every node. On Laravel 12, phpredis clus
 
 ## Testing
 
-The tests run against Valkey, a single node on port 6379 and a three-master cluster on ports 6380-6382, and need the `redis` PHP extension:
+The tests run against Valkey, a single node on port 6379, a node on port 6390 that acts as a lagging replica, and a three-master cluster on ports 6380-6382, and need the `redis` PHP extension:
 
 ```bash
 docker compose up -d --wait

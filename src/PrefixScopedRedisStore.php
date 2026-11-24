@@ -8,9 +8,14 @@ use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
+use Predis\Client as PredisClient;
+use Predis\Command\RawCommand;
+use Predis\Connection\Replication\ReplicationInterface;
+use Predis\Response\ErrorInterface;
 use Redis;
 use RedisCluster;
 use RuntimeException;
+use Traversable;
 
 class PrefixScopedRedisStore extends RedisStore
 {
@@ -55,13 +60,22 @@ class PrefixScopedRedisStore extends RedisStore
 
             if ($connection instanceof PredisClusterConnection) {
                 // Delete on the node that returned the keys: iterating a Predis cluster resets its slot map.
-                $node->pipeline(function ($pipe) use ($keys) {
+                $replies = $node->pipeline(function ($pipe) use ($keys) {
                     foreach ($keys as $key) {
                         $pipe->del($key);
                     }
                 });
             } else {
-                $connection->del(...$keys);
+                $replies = [$connection->del(...$keys)];
+            }
+
+            // phpredis on a cluster, and Predis without exceptions, return failed replies instead of throwing.
+            foreach ($replies as $reply) {
+                if ($reply === false || $reply instanceof ErrorInterface) {
+                    $error = $reply instanceof ErrorInterface ? $reply->getMessage() : $connection->client()->getLastError();
+
+                    throw new RuntimeException("Deleting cache keys failed: {$error}");
+                }
             }
         }
     }
@@ -78,18 +92,35 @@ class PrefixScopedRedisStore extends RedisStore
         $nodes = match (true) {
             $client instanceof RedisCluster => $client->_masters(),
             $client instanceof Redis => [null],
-            default => $client,
+            // Predis 2 cannot iterate a replication client.
+            $client->getConnection() instanceof Traversable => $client,
+            default => [$client],
         };
 
         foreach ($nodes as $node) {
+            // Predis sends SCAN to a replica, and retries it on one when the master fails: a lagging replica misses keys.
+            $predisConnection = $node instanceof PredisClient ? $node->getConnection() : null;
+            if ($predisConnection instanceof ReplicationInterface) {
+                $predisConnection = $predisConnection->getMaster();
+            }
+
             $cursor = '0';
 
             do {
-                [$cursor, $keys] = match (true) {
+                $reply = match (true) {
                     $client instanceof RedisCluster => $client->rawCommand($node, 'SCAN', $cursor, 'MATCH', $pattern, 'COUNT', 1000),
                     $client instanceof Redis => $client->rawCommand('SCAN', $cursor, 'MATCH', $pattern, 'COUNT', 1000),
-                    default => $node->executeRaw(['SCAN', $cursor, 'MATCH', $pattern, 'COUNT', '1000']),
+                    $predisConnection !== null => $predisConnection->executeCommand(new RawCommand('SCAN', [$cursor, 'MATCH', $pattern, 'COUNT', '1000'])),
+                    default => throw new RuntimeException('Unsupported Redis client ['.$client::class.'].'),
                 };
+
+                if (! is_array($reply)) {
+                    $error = $reply instanceof ErrorInterface ? $reply->getMessage() : $client->getLastError();
+
+                    throw new RuntimeException("Scanning cache keys failed: {$error}");
+                }
+
+                [$cursor, $keys] = $reply;
 
                 if ($keys !== []) {
                     yield $node => $keys;

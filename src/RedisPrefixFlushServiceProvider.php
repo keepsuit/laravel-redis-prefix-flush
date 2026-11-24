@@ -3,7 +3,7 @@
 namespace Keepsuit\RedisPrefixFlush;
 
 use Illuminate\Cache\CacheManager;
-use Illuminate\Foundation\Application;
+use Illuminate\Contracts\Foundation\Application;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
 
@@ -22,7 +22,7 @@ class RedisPrefixFlushServiceProvider extends PackageServiceProvider
                 $connection = $config['connection'] ?? 'default';
 
                 $store = new PrefixScopedRedisStore(
-                    $app['redis'],
+                    $app->make('redis'),
                     $this->getPrefix($config),
                     $connection,
                     $this->getSerializableClasses($config),
