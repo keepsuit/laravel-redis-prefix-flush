@@ -169,8 +169,12 @@ it('deletes every key when both prefixes are empty', function (string $client, s
 it('flushes across several scan batches', function (string $client, string $topology) {
     $this->useRedis($client, $topology);
 
-    Cache::putMany(array_fill_keys(array_map(fn (int $i) => "key-$i", range(1, 2500)), 'value'), 60);
+    // The hash tag puts every key on one cluster node, so that node needs several SCAN pages.
+    Cache::putMany(array_fill_keys(array_map(fn (int $i) => "{tag}key-$i", range(1, 2500)), 'value'), 60);
     Cache::store('app_b')->put('key', 'value');
+
+    $firstPageCursors = array_map(fn (int $port) => $this->admin($port)->rawCommand('SCAN', '0', 'MATCH', 'app_a_cache_*', 'COUNT', 1000)[0], $this->nodes);
+    expect(array_filter($firstPageCursors, fn ($cursor) => (string) $cursor !== '0'))->not->toBeEmpty();
 
     Cache::flush();
 
@@ -204,3 +208,15 @@ it('scans the master of a predis replication', function () {
 
     expect($this->keys())->toBe(['app_b_cache_key']);
 });
+
+it('throws when the keys cannot be deleted', function (string $client, string $topology) {
+    $this->useRedis($client, $topology);
+
+    Cache::put('key', 'value');
+    foreach ($this->nodes as $port) {
+        $this->admin($port)->rawCommand('ACL', 'SETUSER', 'app_a', '-del');
+    }
+
+    expect(fn () => Cache::flush())->toThrow(Exception::class)
+        ->and($this->keys())->toBe(['app_a_cache_key']);
+})->with('redis');

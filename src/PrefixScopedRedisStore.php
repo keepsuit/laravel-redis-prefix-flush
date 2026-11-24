@@ -9,7 +9,9 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Predis\Client as PredisClient;
+use Predis\Command\RawCommand;
 use Predis\Connection\Replication\ReplicationInterface;
+use Predis\Response\ErrorInterface;
 use Redis;
 use RedisCluster;
 use RuntimeException;
@@ -52,24 +54,28 @@ class PrefixScopedRedisStore extends RedisStore
 
         $pattern = addcslashes($connectionPrefix.$this->prefix, '*?[]\\').'*';
 
-        // Predis registers UNLINK only from 3.5.
-        $delete = $connection instanceof PredisConnection && ! $connection->client()->getCommandFactory()->supports('UNLINK')
-            ? 'del'
-            : 'unlink';
-
         foreach ($this->scan($connection, $pattern) as $node => $keys) {
-            // Scanned keys carry the connection prefix, which the client adds again on delete.
+            // Scanned keys carry the connection prefix, which the client adds again on DEL.
             $keys = array_map(fn (string $key) => substr($key, strlen($connectionPrefix)), $keys);
 
             if ($connection instanceof PredisClusterConnection) {
                 // Delete on the node that returned the keys: iterating a Predis cluster resets its slot map.
-                $node->pipeline(function ($pipe) use ($keys, $delete) {
+                $replies = $node->pipeline(function ($pipe) use ($keys) {
                     foreach ($keys as $key) {
-                        $pipe->{$delete}($key);
+                        $pipe->del($key);
                     }
                 });
             } else {
-                $connection->{$delete}(...$keys);
+                $replies = [$connection->del(...$keys)];
+            }
+
+            // phpredis on a cluster, and Predis without exceptions, return failed replies instead of throwing.
+            foreach ($replies as $reply) {
+                if ($reply === false || $reply instanceof ErrorInterface) {
+                    $error = $reply instanceof ErrorInterface ? $reply->getMessage() : $connection->client()->getLastError();
+
+                    throw new RuntimeException("Deleting cache keys failed: {$error}");
+                }
             }
         }
     }
@@ -92,19 +98,29 @@ class PrefixScopedRedisStore extends RedisStore
         };
 
         foreach ($nodes as $node) {
-            // Predis sends SCAN to a replica, which misses keys not yet replicated.
-            if ($node instanceof PredisClient && $node->getConnection() instanceof ReplicationInterface) {
-                $node->getConnection()->switchToMaster();
+            // Predis sends SCAN to a replica, and retries it on one when the master fails: a lagging replica misses keys.
+            $predisConnection = $node instanceof PredisClient ? $node->getConnection() : null;
+            if ($predisConnection instanceof ReplicationInterface) {
+                $predisConnection = $predisConnection->getMaster();
             }
 
             $cursor = '0';
 
             do {
-                [$cursor, $keys] = match (true) {
+                $reply = match (true) {
                     $client instanceof RedisCluster => $client->rawCommand($node, 'SCAN', $cursor, 'MATCH', $pattern, 'COUNT', 1000),
                     $client instanceof Redis => $client->rawCommand('SCAN', $cursor, 'MATCH', $pattern, 'COUNT', 1000),
-                    default => $node->executeRaw(['SCAN', $cursor, 'MATCH', $pattern, 'COUNT', '1000']),
+                    $predisConnection !== null => $predisConnection->executeCommand(new RawCommand('SCAN', [$cursor, 'MATCH', $pattern, 'COUNT', '1000'])),
+                    default => throw new RuntimeException('Unsupported Redis client ['.$client::class.'].'),
                 };
+
+                if (! is_array($reply)) {
+                    $error = $reply instanceof ErrorInterface ? $reply->getMessage() : $client->getLastError();
+
+                    throw new RuntimeException("Scanning cache keys failed: {$error}");
+                }
+
+                [$cursor, $keys] = $reply;
 
                 if ($keys !== []) {
                     yield $node => $keys;
