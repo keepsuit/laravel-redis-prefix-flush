@@ -13,6 +13,7 @@ use Predis\Connection\Replication\ReplicationInterface;
 use Redis;
 use RedisCluster;
 use RuntimeException;
+use Traversable;
 
 class PrefixScopedRedisStore extends RedisStore
 {
@@ -51,19 +52,24 @@ class PrefixScopedRedisStore extends RedisStore
 
         $pattern = addcslashes($connectionPrefix.$this->prefix, '*?[]\\').'*';
 
+        // Predis registers UNLINK only from 3.5.
+        $delete = $connection instanceof PredisConnection && ! $connection->client()->getCommandFactory()->supports('UNLINK')
+            ? 'del'
+            : 'unlink';
+
         foreach ($this->scan($connection, $pattern) as $node => $keys) {
-            // Scanned keys carry the connection prefix, which the client adds again on UNLINK.
+            // Scanned keys carry the connection prefix, which the client adds again on delete.
             $keys = array_map(fn (string $key) => substr($key, strlen($connectionPrefix)), $keys);
 
             if ($connection instanceof PredisClusterConnection) {
                 // Delete on the node that returned the keys: iterating a Predis cluster resets its slot map.
-                $node->pipeline(function ($pipe) use ($keys) {
+                $node->pipeline(function ($pipe) use ($keys, $delete) {
                     foreach ($keys as $key) {
-                        $pipe->unlink($key);
+                        $pipe->{$delete}($key);
                     }
                 });
             } else {
-                $connection->unlink(...$keys);
+                $connection->{$delete}(...$keys);
             }
         }
     }
@@ -80,7 +86,9 @@ class PrefixScopedRedisStore extends RedisStore
         $nodes = match (true) {
             $client instanceof RedisCluster => $client->_masters(),
             $client instanceof Redis => [null],
-            default => $client,
+            // Predis 2 cannot iterate a replication client.
+            $client->getConnection() instanceof Traversable => $client,
+            default => [$client],
         };
 
         foreach ($nodes as $node) {

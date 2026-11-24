@@ -33,7 +33,7 @@ With Laravel's default configuration (`APP_NAME=Shop`), that is `shop-database-s
 - With an empty cache prefix, the scope is the connection prefix.
 - With both prefixes empty, every key of the database is deleted, one batch at a time. The result is the same as `FLUSHDB`, but the command is never sent.
 
-Keys are found with `SCAN ... MATCH` in batches of 1000 and deleted with `UNLINK`, which frees memory in the background. `FLUSHDB`, `FLUSHALL` and `KEYS` are never sent. Glob characters in the prefixes are escaped, so they cannot widen the scope.
+Keys are found with `SCAN ... MATCH` in batches of 1000 and deleted with `UNLINK`, which frees memory in the background (with Predis before 3.5, `DEL`). `FLUSHDB`, `FLUSHALL` and `KEYS` are never sent. Glob characters in the prefixes are escaped, so they cannot widen the scope.
 
 Unlike `FLUSHDB`, the flush is not atomic: a key written while the scan is running may survive it.
 
