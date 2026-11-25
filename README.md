@@ -30,7 +30,7 @@ The package registers its store under the `redis` driver name. A `redis` store t
 With Laravel's default configuration (`APP_NAME=Shop`), that is `shop-database-shop-cache-*`. Keys of the same application outside the cache prefix (queues, sessions, Horizon) and keys of other applications are not touched.
 
 - `flushLocks()` does the same on the lock connection. As in Laravel, it requires the lock connection to differ from the cache connection.
-- The `redis` session driver stores sessions under the cache prefix. With sessions on the lock connection (the default `session.connection`), `flushLocks()` also deletes every session and logs users out. Put sessions on their own Redis connection or database (`SESSION_CONNECTION`) to keep them out of the scope.
+- The `redis` session driver stores sessions under the cache prefix, on `session.connection` (`default` when unset, like the lock connection). There, `flushLocks()` also deletes every session, as Laravel's own store does by flushing the whole lock database. Put sessions on their own Redis connection or database (`SESSION_CONNECTION`) to keep them out of the scope.
 - With an empty cache prefix, the scope is the connection prefix.
 - With both prefixes empty, every key of the database is deleted, one batch at a time. The result is the same as `FLUSHDB`, but the command is never sent.
 
